@@ -4,3 +4,5 @@ httpx
 python-dotenv
 PyPDF2
 pydantic
+requests
+PyMuPDF
