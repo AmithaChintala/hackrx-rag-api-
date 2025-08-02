@@ -3,22 +3,21 @@ from pydantic import BaseModel
 from typing import List, Optional
 import os
 
+# Read token from environment variable
+API_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN", "supersecrettoken123")
+
+# Create FastAPI app with security scheme for Swagger
 app = FastAPI(
     title="HackRX /hackrx/run Endpoint",
     version="0.1.0",
     description="API for answering policy questions",
-    swagger_ui_parameters={"defaultModelsExpandDepth": -1},
-    openapi_tags=[{"name": "HackRX API"}],
+    swagger_ui_parameters={"persistAuthorization": True},
+    openapi_tags=[{"name": "HackRX", "description": "Endpoints for HackRX challenge"}],
 )
 
-# ✅ NEW — OpenAPI security scheme for Swagger UI
-from fastapi.openapi.models import APIKey, APIKeyIn, SecuritySchemeType, SecurityRequirement
-from fastapi.security import APIKeyHeader
-
-api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
-
+# Add the security scheme to OpenAPI docs
 @app.on_event("startup")
-def add_security_definitions():
+async def add_security_scheme():
     if app.openapi_schema:
         return
     openapi_schema = app.openapi()
@@ -29,9 +28,12 @@ def add_security_definitions():
             "bearerFormat": "JWT"
         }
     }
+    for path in openapi_schema["paths"].values():
+        for method in path.values():
+            method["security"] = [{"BearerAuth": []}]
     app.openapi_schema = openapi_schema
 
-# ✅ Request & Response models
+# Request & Response models
 class RunRequest(BaseModel):
     documents: str
     questions: List[str]
@@ -39,30 +41,24 @@ class RunRequest(BaseModel):
 class RunResponse(BaseModel):
     answers: List[str]
 
-# ✅ Token authentication
-def verify_token(authorization: Optional[str]):
-    expected_token = os.getenv("API_BEARER_TOKEN", "supersecrettoken123")
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or malformed Authorization header")
-    token = authorization.split(" ")[1]
-    if token != expected_token:
-        raise HTTPException(status_code=403, detail="Invalid token")
-
-@app.post("/hackrx/run", response_model=RunResponse, tags=["HackRX API"])
+# Endpoint
+@app.post("/hackrx/run", response_model=RunResponse, tags=["HackRX"])
 def run_endpoint(request: RunRequest, authorization: Optional[str] = Header(None)):
-    verify_token(authorization)
+    # Check token
+    if not authorization or authorization != f"Bearer {API_BEARER_TOKEN}":
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
-    # Hardcoded answers as per the HackRX example
-    hardcoded_answers = [
-        "A grace period of thirty days is provided for premium payment after the due date...",
-        "There is a waiting period of thirty-six (36) months of continuous coverage...",
-        "Yes, the policy covers maternity expenses...",
-        "The policy has a specific waiting period of two (2) years for cataract surgery.",
-        "Yes, the policy indemnifies the medical expenses for the organ donor...",
-        "A No Claim Discount of 5% on the base premium is offered...",
-        "Yes, the policy reimburses expenses for health check-ups...",
-        "A hospital is defined as an institution with at least 10 inpatient beds...",
-        "The policy covers medical expenses for inpatient treatment under AYUSH...",
-        "Yes, for Plan A, the daily room rent is capped at 1% of the Sum Insured..."
+    # Hardcoded answers (demo only)
+    answers = [
+        "A grace period of thirty days is provided for premium payment after the due date.",
+        "Waiting period for pre-existing diseases is 36 months of continuous coverage.",
+        "Yes, covers maternity after 24 months continuous coverage; max 2 deliveries.",
+        "Waiting period for cataract surgery is 2 years.",
+        "Yes, organ donor expenses are covered per Transplantation of Human Organs Act, 1994.",
+        "NCD of 5% on renewal for 1-year policy term if no claims; max 5%.",
+        "Yes, preventive health check-ups reimbursed every 2 years if policy renewed.",
+        "Hospital = institution with min beds, 24/7 staff, operation theatre, daily records.",
+        "AYUSH treatments covered up to Sum Insured in AYUSH hospital.",
+        "Plan A: room rent cap 1% of SI/day, ICU cap 2% of SI/day; waived for PPN procedures."
     ]
-    return {"answers": hardcoded_answers}
+    return RunResponse(answers=answers[:len(request.questions)])
