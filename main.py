@@ -1,64 +1,60 @@
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import List, Optional
+import requests
+import fitz  # PyMuPDF for PDF text extraction
 import os
 
-# Read token from environment variable
 API_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN", "supersecrettoken123")
 
-# Create FastAPI app with security scheme for Swagger
-app = FastAPI(
-    title="HackRX /hackrx/run Endpoint",
-    version="0.1.0",
-    description="API for answering policy questions",
-    swagger_ui_parameters={"persistAuthorization": True},
-    openapi_tags=[{"name": "HackRX", "description": "Endpoints for HackRX challenge"}],
-)
+app = FastAPI(title="HackRX /hackrx/run Endpoint")
 
-# Add the security scheme to OpenAPI docs
-@app.on_event("startup")
-async def add_security_scheme():
-    if app.openapi_schema:
-        return
-    openapi_schema = app.openapi()
-    openapi_schema["components"]["securitySchemes"] = {
-        "BearerAuth": {
-            "type": "http",
-            "scheme": "bearer",
-            "bearerFormat": "JWT"
-        }
-    }
-    for path in openapi_schema["paths"].values():
-        for method in path.values():
-            method["security"] = [{"BearerAuth": []}]
-    app.openapi_schema = openapi_schema
-
-# Request & Response models
 class RunRequest(BaseModel):
-    documents: str
-    questions: List[str]
+    documents: str  # URL to PDF
+    questions: list[str]
 
-class RunResponse(BaseModel):
-    answers: List[str]
+@app.post("/hackrx/run")
+async def run_endpoint(
+    authorization: str = Header(..., alias="Authorization"),
+    documents: str = Form(None),
+    questions: str = Form(None),
+    file: UploadFile = File(None)
+):
+    # ✅ Check token
+    if not authorization.startswith("Bearer ") or authorization.split(" ")[1] != API_BEARER_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
-# Endpoint
-@app.post("/hackrx/run", response_model=RunResponse, tags=["HackRX"])
-def run_endpoint(request: RunRequest, authorization: Optional[str] = Header(None)):
-    # Check token
-    if not authorization or authorization != f"Bearer {API_BEARER_TOKEN}":
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    pdf_text = ""
 
-    # Hardcoded answers (demo only)
-    answers = [
-        "A grace period of thirty days is provided for premium payment after the due date.",
-        "Waiting period for pre-existing diseases is 36 months of continuous coverage.",
-        "Yes, covers maternity after 24 months continuous coverage; max 2 deliveries.",
-        "Waiting period for cataract surgery is 2 years.",
-        "Yes, organ donor expenses are covered per Transplantation of Human Organs Act, 1994.",
-        "NCD of 5% on renewal for 1-year policy term if no claims; max 5%.",
-        "Yes, preventive health check-ups reimbursed every 2 years if policy renewed.",
-        "Hospital = institution with min beds, 24/7 staff, operation theatre, daily records.",
-        "AYUSH treatments covered up to Sum Insured in AYUSH hospital.",
-        "Plan A: room rent cap 1% of SI/day, ICU cap 2% of SI/day; waived for PPN procedures."
-    ]
-    return RunResponse(answers=answers[:len(request.questions)])
+    # Case 1: If URL is provided
+    if documents:
+        try:
+            response = requests.get(documents)
+            response.raise_for_status()
+            with open("temp.pdf", "wb") as f:
+                f.write(response.content)
+            pdf_text = extract_text_from_pdf("temp.pdf")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Could not download PDF: {str(e)}")
+
+    # Case 2: If file is uploaded
+    elif file:
+        file_location = f"temp_{file.filename}"
+        with open(file_location, "wb") as f:
+            f.write(await file.read())
+        pdf_text = extract_text_from_pdf(file_location)
+
+    else:
+        raise HTTPException(status_code=400, detail="No PDF URL or file uploaded")
+
+    # Simple mock answers (replace with RAG logic later)
+    answers = ["Answer placeholder for: " + q for q in (questions.split(",") if questions else [])]
+
+    return JSONResponse(content={"answers": answers})
+
+def extract_text_from_pdf(file_path: str) -> str:
+    text = ""
+    with fitz.open(file_path) as pdf:
+        for page in pdf:
+            text += page.get_text()
+    return text
